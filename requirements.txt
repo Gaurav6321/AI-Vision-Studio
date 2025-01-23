@@ -3,3 +3,4 @@ requests
 Pillow
 huggingface-hub
 python-dotenv
+streamlit_lottie
