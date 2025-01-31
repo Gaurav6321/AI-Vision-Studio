@@ -60,7 +60,7 @@ python-dotenv
 streamlit run app.py
 ```
 
-2. Open your browser and navigate to `http://localhost:8501`
+2. Open your browser and navigate to `https://ai-vision-studio.streamlit.app/`
 
 3. Choose between Image Captioning or Text-to-Image Generation
 
