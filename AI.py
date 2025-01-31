@@ -1,6 +1,6 @@
 import streamlit as st
 import requests
-from PIL import Image
+from PIL import Image, ImageOps, ImageFilter
 import io
 from huggingface_hub import InferenceClient
 import time
@@ -10,6 +10,15 @@ from streamlit_lottie import st_lottie
 import json
 import streamlit.components.v1 as components
 
+# API details for image captioning - using a faster model
+API_URL_CAPTION = "https://api-inference.huggingface.co/models/Salesforce/blip-image-captioning-base"
+headers_caption = {"Authorization": "Bearer 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"}
+
+# Define the client for the text-to-image generation model
+client = InferenceClient(
+    model="stabilityai/stable-diffusion-xl-base-1.0",  # Using a faster model
+    token="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"
+)
 
 # Custom CSS with animations and dark theme
 def load_css():
@@ -97,36 +106,8 @@ def load_css():
     .image-container:hover {
         transform: scale(1.02);
     }
-
-    /* Custom tooltip */
-    .tooltip {
-        position: relative;
-        display: inline-block;
-    }
-
-    .tooltip .tooltiptext {
-        visibility: hidden;
-        background-color: #4ecdc4;
-        color: #1a1a2e;
-        text-align: center;
-        padding: 5px;
-        border-radius: 6px;
-        position: absolute;
-        z-index: 1;
-        bottom: 125%;
-        left: 50%;
-        transform: translateX(-50%);
-        opacity: 0;
-        transition: opacity 0.3s;
-    }
-
-    .tooltip:hover .tooltiptext {
-        visibility: visible;
-        opacity: 1;
-    }
     </style>
     """
-
 
 # Enhanced Creative AI Agent
 class CreativeAgent:
@@ -203,44 +184,19 @@ class CreativeAgent:
         ]
         return suggestions
 
-
-# Image processing functions
-def optimize_image(image, max_size=(800, 800)):
+# Optimize image processing
+def optimize_image(image, max_size=(512, 512)):
     img = Image.open(io.BytesIO(image))
     img.thumbnail(max_size, Image.Resampling.LANCZOS)
     return img
 
-
-def apply_image_effects(img):
-    """Apply basic image enhancements"""
-    from PIL import ImageEnhance
-    enhancer = ImageEnhance.Contrast(img)
-    img = enhancer.enhance(1.2)
-    enhancer = ImageEnhance.Brightness(img)
-    img = enhancer.enhance(1.1)
-    return img
-
-
-def query_caption(image_bytes):
+def query_caption(image):
     try:
-        # Load the image
-        img = Image.open(io.BytesIO(image_bytes)).convert('RGB')
-
-        # Debugging step to confirm image processing works
-        img.show()
-
-        # Placeholder for actual caption generation logic
-        return [{"generated_text": "Test caption"}]
-    except Exception as e:
-        st.error(f"Error generating caption: {str(e)}")
+        response = requests.post(API_URL_CAPTION, headers=headers_caption, data=image, timeout=10)
+        return response.json()
+    except:
+        st.error("Caption generation failed. Please try again.")
         return None
-
-
-
-def load_lottie_file(filepath: str):
-    with open(filepath, "r") as f:
-        return json.load(f)
-
 
 # Main application
 def main():
@@ -288,23 +244,24 @@ def main():
     else:
         gallery_tab()
 
-
 def text_to_image_tab():
     st.markdown('<h2 class="section-header">🎨 Text-to-Image Generation</h2>', unsafe_allow_html=True)
 
     col1, col2 = st.columns([2, 1])
 
     with col1:
-        text_input = st.text_area(
-            "Describe your image:",
-            placeholder="Enter your detailed description...",
-            height=100
-        )
+        with st.form("generation_form"):
+            text_input = st.text_area(
+                "Describe your image:",
+                placeholder="Enter your detailed description...",
+                height=100
+            )
+            use_enhancement = st.checkbox("Use AI Enhancement", value=True)
+            submitted = st.form_submit_button("Generate Image")
 
-        use_enhancement = st.checkbox("Use AI Enhancement", value=True)
-
-        if st.button("Generate Image", key="generate_btn"):
-            generate_image(text_input, use_enhancement)
+            if submitted:
+                with st.spinner("🎨 Creating your masterpiece..."):
+                    generate_image(text_input, use_enhancement)
 
     with col2:
         st.markdown("### 💡 Tips")
@@ -315,19 +272,53 @@ def text_to_image_tab():
             "- Mention the style you prefer"
         )
 
-
 def image_captioning_tab():
     st.markdown('<h2 class="section-header">📸 Image Captioning</h2>', unsafe_allow_html=True)
 
-    uploaded_image = st.file_uploader(
-        "Upload your image",
-        type=["jpg", "png"],
-        help="Upload a clear image for better results"
+    uploaded_file = st.file_uploader(
+        "Upload an image",
+        type=["jpg", "jpeg", "png"],
+        help="Max file size: 5MB"
     )
 
-    if uploaded_image:
-        process_uploaded_image(uploaded_image)
+    if uploaded_file is not None:
+        try:
+            image_bytes = uploaded_file.read()
 
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("#### Uploaded Image")
+                img = optimize_image(image_bytes)
+                if img:
+                    st.image(img, use_column_width=True)
+
+            if st.button("Generate Caption", key="caption_btn"):
+                with st.spinner("🔍 Analyzing image..."):
+                    start_time = time.time()
+                    caption_response = query_caption(image_bytes)
+
+                    if caption_response:
+                        caption = caption_response[0]['generated_text']
+                        with col2:
+                            st.markdown("#### Generated Caption")
+                            st.success(caption)
+                            st.download_button(
+                                label="📝 Download Caption",
+                                data=caption,
+                                file_name="image_caption.txt",
+                                mime="text/plain"
+                            )
+
+                            creative_agent = CreativeAgent()
+                            suggestions = creative_agent.analyze_caption(caption)
+
+                            with st.expander("💡 Creative Suggestions"):
+                                for suggestion in suggestions:
+                                    st.write(f"- {suggestion}")
+
+                            st.write(f"⏱️ Processing time: {time.time() - start_time:.2f}s")
+        except Exception as e:
+            st.error(f"Error processing image: {str(e)}")
 
 def creative_assistant_tab():
     st.markdown('<h2 class="section-header">🤖 Creative Assistant</h2>', unsafe_allow_html=True)
@@ -346,16 +337,21 @@ def creative_assistant_tab():
 
         for idx, variation in enumerate(variations):
             with cols[idx % 2]:
-                st.markdown(f"""
-                    <div style='background: rgba(30, 30, 50, 0.5); padding: 1em; border-radius: 10px; margin-bottom: 1em;'>
-                        <p>{variation['prompt']}</p>
-                        <p><small>Style: {variation['style']} | Mood: {variation['mood']}</small></p>
-                    </div>
-                """, unsafe_allow_html=True)
+                with st.container(border=True):
+                    st.markdown(f"""
+                        <div style='padding: 1em; border-radius: 10px; margin-bottom: 1em;'>
+                            <p style='font-size: 1.1em;'>{variation['prompt']}</p>
+                            <div style='display: flex; gap: 1em; margin-top: 0.5em;'>
+                                <span class='badge'>{variation['style']}</span>
+                                <span class='badge'>{variation['mood']}</span>
+                                <span class='badge'>{variation['time']}</span>
+                            </div>
+                        </div>
+                    """, unsafe_allow_html=True)
 
-                if st.button(f"Generate This Variation", key=f"var_{idx}"):
-                    generate_image(variation['prompt'], True)
-
+                    if st.button(f"Generate This Variation", key=f"var_{idx}"):
+                        with st.spinner("Generating variation..."):
+                            generate_image(variation['prompt'], True)
 
 def gallery_tab():
     st.markdown('<h2 class="section-header">🖼️ Gallery</h2>', unsafe_allow_html=True)
@@ -364,127 +360,58 @@ def gallery_tab():
         columns = st.columns(3)
         for idx, img in enumerate(st.session_state.generated_images):
             with columns[idx % 3]:
-                st.image(img, use_column_width=True)
-                if st.button(f"Download Image {idx + 1}", key=f"download_{idx}"):
-                    # Add download functionality
-                    pass
+                with st.container(border=True):
+                    st.image(img, use_column_width=True)
+                    img_bytes = io.BytesIO()
+                    img.save(img_bytes, format='PNG')
+                    st.download_button(
+                        label="📥 Download",
+                        data=img_bytes.getvalue(),
+                        file_name=f"creation_{idx + 1}.png",
+                        mime="image/png",
+                        key=f"dl_{idx}"
+                    )
     else:
         st.info("Generate some images to see them in your gallery!")
 
-
 def generate_image(prompt, use_enhancement=True):
-    with st.spinner("🎨 Creating your masterpiece..."):
-        try:
-            creative_agent = CreativeAgent()
-            if use_enhancement:
-                enhanced_prompt, elements = creative_agent.enhance_prompt(prompt)
-                st.markdown("### 🎨 Enhanced Elements")
+    try:
+        creative_agent = CreativeAgent()
+        if use_enhancement:
+            enhanced_prompt, elements = creative_agent.enhance_prompt(prompt)
+            with st.expander("🎨 Enhanced Elements"):
                 st.json(elements)
-                prompt_to_use = enhanced_prompt
-            else:
-                prompt_to_use = prompt
+            prompt_to_use = enhanced_prompt
+        else:
+            prompt_to_use = prompt
 
-            client = InferenceClient(
-                "stabilityai/stable-diffusion-xl-base-1.0",
-                token="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"
-            )
+        image = client.text_to_image(
+            prompt_to_use,
+            negative_prompt="blurry, bad quality, distorted, ugly, deformed",
+            num_inference_steps=50,
+            guidance_scale=7.5
+        )
 
-            image = client.text_to_image(
-                prompt_to_use,
-                negative_prompt="blurry, bad quality, distorted, ugly, deformed",
-                num_inference_steps=50,
-                guidance_scale=7.5
-            )
+        # Add to gallery
+        st.session_state.generated_images.append(image)
 
-            # Apply effects if enabled
-            if st.session_state.get('enable_effects', True):
-                image = apply_image_effects(image)
-
-            # Add to gallery
-            st.session_state.generated_images.append(image)
-
-            # Display image with download button
+        # Display results
+        col1, col2 = st.columns(2)
+        with col1:
             st.image(image, caption="Generated Image", use_column_width=True)
-
-            # Save image
+        with col2:
+            st.success("🎉 Image generated successfully!")
             img_bytes = io.BytesIO()
             image.save(img_bytes, format='PNG')
             st.download_button(
                 label="📥 Download Image",
                 data=img_bytes.getvalue(),
-                file_name=f"ai_vision_{int(time.time())}.png",
+                file_name=f"creation_{len(st.session_state.generated_images)}.png",
                 mime="image/png"
             )
 
-        except Exception as e:
-            st.error(f"Failed to generate image: {str(e)}")
-
-
-def process_uploaded_image(uploaded_image):
-    with st.spinner("📸 Processing your image..."):
-        try:
-            image = uploaded_image.read()
-            img = optimize_image(image)
-
-            # Display original and processed images side by side
-            col1, col2 = st.columns(2)
-            with col1:
-                st.markdown("#### Original Image")
-                st.image(img, use_column_width=True)
-
-            with col2:
-                st.markdown("#### Enhanced Image")
-                enhanced_img = apply_image_effects(img)
-                st.image(enhanced_img, use_column_width=True)
-
-            # Generate and display caption
-            caption_response = query_caption(image)
-            if caption_response:
-                caption = caption_response[0]['generated_text']
-                st.success(f"📝 Caption: {caption}")
-
-                # Add creative suggestions
-                creative_agent = CreativeAgent()
-                suggestions = creative_agent.analyze_caption(caption)
-                st.markdown("### 💡 Creative Suggestions")
-                for suggestion in suggestions:
-                    st.write(f"• {suggestion}")
-
-        except Exception as e:
-            st.error(f"Error processing image: {str(e)}")
-
-def image_captioning_tab():
-    """Image captioning tab implementation"""
-    st.markdown('<h2 class="section-header">📸 Image Captioning</h2>', unsafe_allow_html=True)
-    uploaded_image = st.file_uploader("Upload your image", type=["jpg", "png"])
-
-    if st.button("Generate Caption"):
-        if uploaded_image is not None:
-            try:
-                with st.spinner("Processing..."):
-                    start_time = time.time()
-
-                    # Read image data
-                    image_data = uploaded_image.read()
-
-                    # Optimize and display image
-                    img = optimize_image(image_data)  # Ensure this function is defined correctly
-                    st.image(img, caption="Uploaded Image", use_column_width=True)
-
-                    # Generate caption
-                    caption_response = query_caption(image_data)  # Ensure this function is defined correctly
-                    if caption_response:
-                        caption = caption_response[0]['generated_text']
-                        st.success(f"Caption: {caption}")
-                        st.write(f"Processing time: {time.time() - start_time:.2f} seconds")
-                    else:
-                        st.error("Failed to generate caption.")
-            except Exception as e:
-                st.error(f"Error processing image: {str(e)}")
-        else:
-            st.warning("Please upload an image first.")
-
-
+    except Exception as e:
+        st.error(f"Failed to generate image: {str(e)}")
 
 if __name__ == "__main__":
     main()
